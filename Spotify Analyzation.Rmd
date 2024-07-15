@@ -1,0 +1,589 @@
+---
+title: "Homework 1"
+author: "Min Jegal, Alba Arribas"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    df_print: paged
+---
+
+
+
+```{r global_options, include=T, echo = F}
+knitr::opts_chunk$set(echo = T, warning=FALSE, message=FALSE)
+```
+For this assignment, as it is a very popular topic, we wanted to know if we can achieve a conclusion about what sort of music is most popular. Knowing that nowadays the music is streamed in different platforms. 
+
+
+We thought that factors as danceability in music will make them more famous, but we cannot be sure about what other characteristics can affect the number of streams of song. So, we decided to look up through clustering the Spotify data we downloaded from Kaggle (https://www.kaggle.com/datasets/nelgiriyewithana/top-spotify-songs-2023).
+
+
+The data is about the most famous songs of the year 2023 within different platforms. It contains several indices that shows the musical attributes of the song such as bpm, energy, acousticness and danceability.
+
+# 0. Understanding Data
+
+The first step is to get a broad idea about how the data looks like so we can make the corresponding computations that will make our analysis easier.
+```{r}
+spotify.df = read.csv(file = "spotify-2023.csv", header=T, sep=",", dec=".")
+head(spotify.df)
+```
+And a bit more information about each column.
+
+```{r}
+str(spotify.df)
+```
+At a first glance, we can see that the key and mode data have type character, thus it might be a problem for further computations, so we have to be careful with that.
+
+```{r}
+dim(spotify.df)
+```
+We have 953 rows and 24 columns. To talk briefly about the columns, we see that this dataset is mainly a comparison of the popularity of a song in different platforms such as Spotify or apple music. In adding to this, there is some specific information about each song like danceability or release date. After this broad approach, we are now going to explain each column in a more concrete way:
+
+1. track_name: Name of the song
+2. artist.s._name: Name of the artist(s) of the song
+3. artist_count: Number of artists in the song
+4. released_year: Year in which the song was released
+5. released_month: Month in which the song was released
+6. released_day: Day of the month in which the song was released
+7. in_spotify_playlists: Number of Spotify playlists the song is in
+8. in_spotify_charts: Presence and rank of the song on Spotify charts
+9. streams: Total number of streams on Spotify
+10. in_apple_playlists: Number of Apple Music playlists the song is in
+11. in_apple_charts: Presence and rank of the song on Apple Music charts
+12. in_deezer_playlists: Number of Deezer playlists the song is included in
+13. in_deezer_charts: Presence and rank of the song on Deezer charts
+14. in_shazam_charts: Presence and rank of the song on Shazam charts
+15. bpm: Beats per minute, a measure of song tempo
+16. key: Key of the song
+17. mode: Mode of the song (major or minor)
+18. danceability_.: Percentage indicating how suitable the song is for dancing
+19. valence_.: Positivity of the song's musical content
+20. energy_.: Perceived energy level of the song
+21. acousticness_.: Amount of acoustic sound in the song
+22. instrumentalness_.: Amount of instrumental content in the song
+23. liveness_.: Presence of live performance elements
+24. speechiness_.: Amount of spoken words in the song
+
+
+After our first glance at the data, we can now come up with some questions about this dataset:
+
+1. Does the indicators of the popularity of the songs is the same in every song?
+ : To answer this, we can analyse the number of streams and the relations between in_spotify_playlists, in_spotify_charts, in_apple_playlists, in_apple_charts, in_deezer_playlists ,in_deezer_charts
+ - So, one of our goals will be to look for if whether there's a common pattern in how songs perform across different platforms (Spotify, Apple, Deezer)
+ 
+To achieve this, our first step will be to analyse the data and then try to reduce the dimension of it so that we can find what is the main attributes that influence the amount of the streams.
+ 
+2. What is related to the popularity of the song?
+: We will know look up the relation between variables through PCA, factor analysis and clustering.
+
+
+
+# 1. Data Processing
+
+All these questions are very interesting but if we want to actually answer them, the very first thing we need to do is clean up the data because it can affect our predictions.
+
+## 1-1) Deleting Useless data
+Firstly, we checked the variables that we wanted to use, and we saw that there are some variables that are too specific and won't be useful for our analysis, so we are going to remove them. Therefore, we proceed to remove the variable "released_day".
+
+```{r}
+spotify.df = spotify.df[-c(6)]
+summary(spotify.df)
+```
+
+## 1-2) Checking NAs
+After deleting the unnecessary columns, we now check if there are any missing values in our data.
+
+```{r}
+barplot(colMeans(is.na(spotify.df)), las=2)
+```
+
+In this plot we can see that there are NA data in "in_shazam_charts" column. As the platform shazam doesn’t have the same structure as the other platforms, we decided that it was better to remove it and focus on streaming platforms where you can make playlists.
+
+```{r}
+spotify.df <- subset(spotify.df, select = -c(13))#remove shazam 
+barplot(colMeans(is.na(spotify.df)), las=2)
+```
+
+## 1-3) Transforming Data into suitabale form
+
+We changed the type of the variables of year and month, as it doesn't make sense that they are numeric. 
+
+Thinking of the characteristics of the data, 'released_year' and 'released_month' variables represent time periods, not continuous quantities. Thus, we thought treating them as factors will prevent them from being included inappropriately in calculations, such as mean and standard deviation that assume numerical data.
+
+```{r}
+spotify.df$released_year = as.factor(spotify.df$released_year)
+spotify.df$released_month = as.factor(spotify.df$released_month)
+str(spotify.df)
+```
+
+The higher the number of streams and presence in playlist indicates higher popularity, whereas on the ranking of charts a smaller number means higher popularity. So, we transformed the data as following.
+
+```{r}
+
+transform_rank <- function(rank) {
+  ifelse(!is.na(rank), 1 / (rank + 1), NA)
+}
+
+spotify.df$in_spotify_charts <- transform_rank(spotify.df$in_spotify_charts)
+spotify.df$in_apple_charts <- transform_rank(spotify.df$in_apple_charts)
+spotify.df$in_deezer_charts <- transform_rank(spotify.df$in_deezer_charts)
+
+
+max_rank <- max(c(na.omit(spotify.df$in_spotify_charts), na.omit(spotify.df$in_apple_charts), na.omit(spotify.df$in_deezer_charts)), na.rm = TRUE)
+
+
+spotify.df$in_spotify_charts[is.na(spotify.df$in_spotify_charts)] <- 1 / (max_rank + 2)
+spotify.df$in_apple_charts[is.na(spotify.df$in_apple_charts)] <- 1 / (max_rank + 2)
+spotify.df$in_deezer_charts[is.na(spotify.df$in_deezer_charts)] <- 1 / (max_rank + 2)
+
+```
+
+
+## 1-4) Checking Outliers
+After that, we checked if there are any outliers.
+
+```{r}
+library(outliers)
+boxplot(subset(spotify.df, select = -c(1,2,14,15)))$out
+```
+
+We can see that the values in 'streams' are extremely large. We might have to scale it in the future to prevent the results being biased.
+
+Before we deal with that, let's dig deeper into the data by seeing its distribution. 
+
+# 2) Getting Insights from the data.
+## 2-1) Data related to the popularity of songs
+
+We plotted the different distributions of the different platforms.
+
+```{r}
+variables <- c("streams","in_spotify_playlists", "in_spotify_charts", "in_apple_playlists", "in_apple_charts", "in_deezer_playlists", "in_deezer_charts")
+
+par(mfrow = c(3, 3)) 
+for (variable in variables) {
+  hist(spotify.df[[variable]], main = paste("Histogram of", variable), xlab = variable)
+}
+```
+
+```{r}
+platform = subset(spotify.df, select = c("in_spotify_playlists", "in_spotify_charts", "in_apple_playlists", "in_apple_charts", "in_deezer_playlists", "in_deezer_charts"))
+boxplot(platform)$out
+```
+
+Through plotting the distribution, we could discover more trends on the data than from the summarization of data. 
+
+We could see that they all follow a very similar distribution, but we can also see some more unique information such as:
+
+1) The number of playlists is as the following: Spotify > Deezer > Apple
+2) The chart distributions from Deezer and Spotify look alike whereas Apple has songs from various ranks on chart
+
+
+We assume these insights are driven since the data is about the popular song in 2023 and moreover the provider of data was the music platform Spotify.
+
+As, the range of data varies, thus certain platforms are deemed more critical for analysis (e.g., Spotify due to its larger influence), we could weigh the variables differently in the further models to reflect this.
+
+However, we can find out that the data has positive skewness. When we are trying to see what is related to the number of streams whether it is the ranking of charts or number of streams, we thought reducing the skewness is recommended.
+
+Since we have 0s in some data, we cannot use log-transformation, but we used Box-cox transformation, Yeo–Johnson transformation.
+
+```{r}
+library(caret)
+
+columns_to_transform <- c("streams", "in_spotify_playlists", "in_spotify_charts", 
+                          "in_apple_playlists", "in_apple_charts", 
+                          "in_deezer_playlists", "in_deezer_charts")
+data_to_transform <- spotify.df[, columns_to_transform]
+
+preProcValues <- preProcess(data_to_transform, method = c("YeoJohnson"))
+transformed_data <- predict(preProcValues, data_to_transform)
+
+new_column_names <- paste0(columns_to_transform, "_YJ")
+spotify.df[, new_column_names] <- transformed_data
+```
+
+
+```{r}
+library(ggplot2)
+for(col in new_column_names){
+  p <- ggplot(spotify.df, aes_string(x = col)) + 
+    geom_histogram(bins=30, fill='blue', alpha=0.7) + 
+    theme_minimal() + 
+    ggtitle(paste("Distribution of Transformed", col))
+  print(p)
+}
+```
+
+We can see that the skewness of the rankings of charts didn't change. However, we can assume that since the song that is super popular can be far away from the rest of the songs. The outstanding data would mean that the song is very popular thus we will consider all this values as it seems. 
+
+However, as we can see, the number of outliers and distributions are significantly different between attributes like the rankings on charts and number of streams/playlists. Since the number of streams are the generally known as the indicator of the 'popular songs' we will use the data about streams and number of playlists. 
+
+
+To make sure that this was the best, we will analyse the relation between attributes on the correlation matrix on a heatmap and the scatter plots.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library("factoextra")
+```
+
+
+To understand better whether how much each attribute is related to each other we printed a heatmap of the correlation matrix. In this case, we don't have to scale the data since correlation coefficient formula neutralizes the effect of the scale.
+
+```{r}
+correlation_matrix <- cor(spotify.df[, c("streams", "in_spotify_playlists", "in_spotify_charts", "in_apple_playlists", "in_apple_charts", "in_deezer_playlists", "in_deezer_charts")])
+
+corrplot(correlation_matrix, method = "color", tl.cex = 0.7, tl.col = "black", addrect = 2)
+
+```
+
+In the plot above, we can say that there are no negatively correlated variables. We think it is interesting to point out that there is not much correlation between being in charts and in playlists. Also, we see that Spotify and Deezer playlists are very correlated and also, they are very correlated to streams. Therefore, it seems that if a song is in a Spotify or Deezer playlist is going to have more streams.
+
+
+On the heatmap, it seems like the number of streams are usually related to the number of playlist, to make sure we analyse the relation between streams and playlists and charts.
+
+```{r}
+ggplot(spotify.df, aes(x = streams, y = in_spotify_playlists)) +
+  geom_point() +
+  labs(x = "Streams", y = "In Spotify Playlists")
+
+ggplot(spotify.df, aes(x = streams, y = in_spotify_charts)) +
+  geom_point() +
+  labs(x = "Streams", y = "In Spotify Charts")
+
+```
+
+On the first graph, which shows the relation between 'the number of streams' and 'the number of playlists in Spotify', we can see kind of a linear distribution for the playlists. However, there is not really a relation with the charts. This can mean that the charts variables will focus more on the trendiness of the song, which means that they won’t have many streams as they will be listened to for a short period of time.
+
+
+
+## 2-2) Data related to Music Attributes
+From here on, we are looking up which factors are related to the popularity of songs by using factor analysis and clustering in just those characteristics of the songs. So, we are going to look up the variables that are related to the components of the songs, such as, danceability, energy and acousticness.
+
+
+However, despite 'key' and 'mode' data being categorical variables that represent musical attributes we decided to exclude them because even though it can be suitable for factor analysis it can also be a bit sensible to it. Also, we are not going to include 'bpm' as a variable since it is one of the pure musical attributes such as Key or Mode.
+
+However, let's observe the rest the data more sensitively.
+
+## 2-1) Data Processing and Visualization
+
+```{r}
+variables <- c("danceability_.","valence_.","energy_.","acousticness_.",
+               "instrumentalness_.","liveness_.","speechiness_.")
+
+par(mfrow = c(3, 3)) 
+for (variable in variables) {
+  hist(spotify.df[[variable]], main = paste("Histogram of", variable), xlab = variable)
+}
+
+```
+```{r}
+music = subset(spotify.df, select = c("danceability_.","valence_.","energy_.","acousticness_.","instrumentalness_.","liveness_.","speechiness_."))
+boxplot(music)$out
+```
+
+It seems that in the music-related attributes, the scales are relatively similar. However, upon further examination of the plot, it becomes evident that attributes such as "danceability," "valence," and "energy" are well distributed. On the other hand, the variable "instrumentalness_.", that indicates the presence of vocals in a track, has data that will not be useful because almost every song has lyrics, so we decided not to include it in further analysis. Therefore, we decided to keep, "acousticness_.", "liveness_." and "speechiness_." as they are not perfectly distributed but also not highly biased.
+
+
+Now, let's look up whether there are common factors among music attributes. We conducted Factor Analysis with the expectation that it might lead us to the better understanding of the general patterns of songs with general popularity.
+
+```{r}
+library(corrplot)
+corr_matrix <- cor(spotify.df[c("danceability_.","valence_.","energy_.","acousticness_.",
+                          "instrumentalness_.","liveness_.","speechiness_.")], use = "complete.obs")
+
+corrplot(corr_matrix, method = "color", type = "upper", 
+         order = "hclust", addCoef.col = "black", 
+         tl.col = "black", tl.srt = 45, 
+         diag = FALSE)
+
+```
+
+It seems like valence and danceability are mildly related whereas energy and acousticness have strong negative relation.
+
+Let's confirm this hypothesis by applying Factor analysis.
+
+```{r}
+variables_fa <- spotify.df[,c("danceability_.","valence_.","energy_.","acousticness_.",
+                          "instrumentalness_.","liveness_.","speechiness_.")]
+
+fp <- factanal(variables_fa, factors = 2, rotation="varimax", scores="regression") 
+
+fp
+cbind(fp$loadings, fp$uniquenesses)
+factor_scores <- fp$scores
+```
+FA with two factors and with Varimax rotation doesn't seem like it is capturing the structure of data. 
+
+This is because when we look at the SS loadings, both factors are fairly close, indicating that each factor is explaining a somewhat similar amount of variance in the data.
+Moreover, Factor1 explains 19.5% and Factor2 explains 18.4% of the variance, thus a total of 32.9% of the variance. Also, a significant P-value indicates that model doesn't fit.
+
+So, to find the best number of factors, we have to examine the eigenvalue which corresponds to a factor, and its value indicates the amount of variance explained by that factor.
+
+```{r}
+eigenvalues <- eigen(cor(variables_fa))$values
+print(eigenvalues)
+
+plot(eigenvalues, type="b", main="Scree Plot", ylab="Eigenvalue", xlab="Number of Factors", col="blue", pch=19)
+abline(h=1, col="red", lty=2)
+
+```
+
+According to Kaiser criterion, you should retain all factors with an eigenvalue above 1. Moreover, the 'elbow' in the scree plot typically indicates the appropriate number of factors.
+
+(ref. Braeken, Johan & Assen, Marcel. (2016). An Empirical Kaiser Criterion. Psychological methods. 22. 10.1037/met0000074.)
+
+For all these reasons, we decided to change the number of factors to 3.
+
+```{r}
+variables_fa <- spotify.df[,c("danceability_.","valence_.","energy_.","acousticness_.",
+                          "instrumentalness_.","liveness_.","speechiness_.")]
+
+fp <- factanal(variables_fa, factors = 3, rotation="varimax", scores="regression") 
+
+fp
+cbind(fp$loadings, fp$uniquenesses)
+factor_scores <- fp$scores
+```
+We can now see that with three factors, we account for 47% of the total variance. With a p-value of 0.0331, the result is statistically significant at the usual 0.05 level, which suggests that the three-factor model fits the data better than the previous model. 
+
+However, with this analysis we only have 47% of the total variance explained, thus it might not be a general pattern that can be applied to the full data.
+
+We can assume that the reason for the low total variance is that half of the data we used was not normally distributed. When we look up the histograms and boxplots of the variances (line 275), we can see that except for the data about danceability, valence, energy, other data has high positive skewness and several outliers.
+
+Thus, we can conclude that the made estimation of the covariance matrix is biased, leading to inaccurate factor loadings and unique variances. As factor analysis assumes multivariate normality because it relies on the covariance matrix. 
+
+From now on let's cluster the number of streams and musical attributes and see how they are related.
+
+# 3) Clustering
+
+Now we will conduct a clustering analysis to find out whether there are relations between the popularity and musical characteristics of the songs.
+
+For clustering, especially for K-means clustering, it is important to scale the data since K-means clustering uses Euclidean distance to calculate the distance. So, we will first scale the data. 
+
+Moreover, we are going to perform K-means clustering on YJ transformed data (conducted on the line 190), and non-transformed data to see whether the distribution of data affects the result.
+
+
+```{r}
+library(scales) 
+library(cluster)
+library(factoextra)
+library(heatmaply)
+```
+
+```{r}
+scaled_data <- as.data.frame(scale(spotify.df[,c("streams","in_spotify_playlists", "in_apple_playlists","in_deezer_playlists","danceability_.","valence_.","energy_.","acousticness_.","instrumentalness_.","liveness_.","speechiness_.")]))
+```
+
+```{r}
+scaled_data_YJ <- as.data.frame(scale(spotify.df[,c("streams_YJ","in_spotify_playlists_YJ", "in_apple_playlists_YJ","in_deezer_playlists_YJ","danceability_.","valence_.","energy_.","acousticness_.","instrumentalness_.","liveness_.","speechiness_.")]))
+```
+
+
+
+```{r}
+heatmaply(scaled_data)
+heatmaply(scaled_data_YJ)
+```
+Through looking up the heatmap of the data we can see that the data set 'scaled_data_yj' which includes transformed data shows more clear clusters among variables. However, we can say that the best number of K will be two when it comes to the unscaled data and 3 when it is scaled.
+
+
+Now let’s determine the optimal number of clusters for the scaled_data and scaled_data_yj by using the elbow method, silhouette method.
+
+```{r}
+set.seed(123) # Setting seed for reproducibility
+
+# Compute total within-cluster sum of square
+wss <- (nrow(scaled_data)-1)*sum(apply(scaled_data,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(scaled_data, centers=i)$withinss)
+
+
+fviz_nbclust(scaled_data, kmeans, method = "wss") + geom_vline(xintercept = 3, linetype = 2)
+fviz_nbclust(scaled_data, kmeans, method = "silhouette")
+```
+In the first graph, the vertical line shows at which point of the number of clusters the within-cluster sum of squares (WSS) starts to decrease more slowly. In the elbow method the elbow point shows a good balance between the number of clusters and the compactness of the clustering. In this case, we can see the suggested number of K is 3.
+
+In the second graph, we can see measurements of how close each point is in one cluster to the points in the neighbouring clusters. So in this other value the suggested value for K is 2.
+
+However, since we put two different types of data together K=2 might not show the desirable result we want. Thus, thinking of the purpose of this analyzation and the attribute of the data, we will set K = 3.
+
+
+Let's look up for the best K in scaled_data_YJ.
+
+```{r}
+wss <- (nrow(scaled_data_YJ)-1)*sum(apply(scaled_data_YJ,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(scaled_data_YJ, centers=i)$withinss)
+
+
+fviz_nbclust(scaled_data_YJ, kmeans, method = "wss") + geom_vline(xintercept = 3, linetype = 2)
+fviz_nbclust(scaled_data_YJ, kmeans, method = "silhouette")
+```
+
+In this case, the average silhouette width is larger than sclaed_Data but the recommend K is the same.
+
+The k-means clustering can be very sensitive to the curse of dimensionality. Thus, before doing K-means clustering let's reduce the dimensionality for better interpretation and reduction of noise.
+
+
+```{r}
+pca_result <- prcomp(scaled_data, center = TRUE)
+plot(pca_result)
+summary(pca_result)
+```
+
+It seems like with scaled_data with 3 components 57% of variance can be explained.
+
+```{r}
+pca_result <- prcomp(scaled_data_YJ, center = TRUE)
+plot(pca_result)
+summary(pca_result)
+```
+
+It seems like with scaled_Data_YJ with 3 components 59% of variance can be explained.
+
+Now let's do the clustering on each data.
+
+```{r}
+k <- 3
+kmeans_result <- kmeans(scaled_data, centers = k, nstart = 25)
+print(kmeans_result)
+
+
+spotify.df$cluster <- kmeans_result$cluster
+
+pca_result <- prcomp(scaled_data)
+spotify.df$pca1 <- pca_result$x[,1]
+spotify.df$pca2 <- pca_result$x[,2]
+
+ggplot(spotify.df, aes(x = pca1, y = pca2, color = as.factor(cluster))) +
+  geom_point() +
+  labs(title = "K-means Clustering with PCA") +
+  theme_minimal()
+```
+
+```{r}
+cluster_summary <- aggregate(scaled_data, by=list(cluster=spotify.df$cluster), FUN=mean)
+cluster_summary
+```
+
+```{r}
+library(reshape2)
+cluster_melted <- melt(cluster_summary, id.vars="cluster")
+
+ggplot(cluster_melted, aes(x=factor(cluster), y=value, fill=variable)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme_minimal() +
+  labs(y="Mean Value", x="Cluster", fill="Variable") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+The clusters in this plot appear to be more spread out, particularly for the green points. However, there is still some overlap between clusters, particularly between the green and red points.
+
+```{r}
+kmeans_result_2 <- kmeans(scaled_data_YJ, centers = k, nstart = 25)
+print(kmeans_result_2)
+
+# Add the cluster assignments to your original data frame
+spotify.df$cluster_2 <- kmeans_result_2$cluster
+
+# Cluster visualization
+pca_result_2 <- prcomp(scaled_data_YJ)
+spotify.df$pca_2_1 <- pca_result_2$x[,1]
+spotify.df$pca_2_2 <- pca_result_2$x[,2]
+
+ggplot(spotify.df, aes(x = pca_2_1, y = pca_2_2, color = as.factor(cluster))) +
+  geom_point() +
+  labs(title = "K-means Clustering with PCA") +
+  theme_minimal()
+```
+
+The clusters here seem to be somewhat mixed, with no clear boundaries, especially between the green and blue points. This suggests that the Box-Cox transformation with subsequent PCA did not result in entirely distinct groupings in the first two principal components. However, we can see that the data is less biased.
+
+```{r}
+cluster_summary_2 <- aggregate(scaled_data_YJ, by=list(cluster_2=spotify.df$cluster_2), FUN=mean)
+cluster_summary_2
+```
+
+```{r}
+cluster_melted <- melt(cluster_summary_2, id.vars="cluster_2")
+
+ggplot(cluster_melted, aes(x=factor(cluster_2), y=value, fill=variable)) +
+  geom_bar(stat="identity", position="dodge") +
+  theme_minimal() +
+  labs(y="Mean Value", x="Cluster", fill="Variable") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+# To look up songs on each cluster
+library(dplyr)
+library("purrr")
+
+get_top_tracks <- function(data, cluster_number, n = 5) {
+  data %>%
+    filter(cluster == cluster_number) %>%
+    slice_head(n = n) %>% 
+    pull(track_name)
+}
+
+
+clusters <- unique(spotify.df$cluster)
+
+for (cluster in clusters) {
+  top_tracks <- get_top_tracks(spotify.df, cluster)
+  cat('Cluster', cluster, ':\n')
+  print(top_tracks)
+  cat('\n\n')
+}
+```
+
+Through comparing cluster of the two data, the patterns appear similar across the clusters, but there are differences in the scale of the mean values, particularly for the streaming-related variables since we transformed the streaming-related variables.
+
+### Cluster 1:
+
+scaled_data_YJ: Appears to have moderately low values for streaming-related variables and positive mean values for danceability and valence, while having negative mean values for energy and speechiness.
+
+scaled_data: Shows a similar pattern but with more pronounced mean values for streaming-related variables, indicating this cluster might be characterized by fewer streams and presence in playlists but still maintains a certain level of danceability and valence.
+
+------
+
+Thus, we can say that through cluster 1, we can see that it is a cluster of songs which are not very streamed, are less intense, active (energy) and contain less spoken words (speechiness). We can assume that these songs are not widely streamed or featured in playlists can still possess a certain appeal due to their danceability and positive mood, despite being less intense and having fewer spoken words. As an example, we can think of genres like smooth jazz or acoustic pop, which might not top the streaming charts but are danceable in a more laid-back way and generally have a positive tone.
+
+------
+
+### Cluster 2:
+
+scaled_data_YJ: This cluster has the highest mean values for the streaming-related variables and positive mean values for danceability, valence, and energy, which means that those songs in this cluster are popular across streaming platforms and tend to be more upbeat and energetic.
+
+scaled_data: Again, shows higher values for the streaming-related variables, but with a more significant difference from the other clusters, reinforcing the suggestion that this cluster contains the most popular and engaging songs.
+
+------
+
+Thus, we can say that through cluster 2, we can see that it is a cluster of songs which are played by certainly large number of users regardless of the platform, and upbeat and energetic.
+
+Therefore, we can conclude that usually highly streamed songs tend to feel more positive, and danceable such as Pop songs, EDM.
+
+------
+
+### Cluster 3:
+
+scaled_data_YJ: Displays lower values for streaming-related variables and particularly low (negative) values for danceability, energy, and valence, implying songs in this cluster are less popular, less danceable, less energetic, and have lower positivity in their musical tone.
+
+scaled_data: Similar to the first one, with low streaming performance and low mean values for danceability, energy, and valence.
+
+------
+
+As we can see from the scatter plot, cluster 1 and 3 have a higher similarity than with cluster 2. Thus cluster 3 indicates pretty much the same thing as cluster 1, but it is a cluster of songs which have more acoustic in the song and fewer vocal parts, more focused on instrumental music.
+
+------
+
+
+#### Conclusion of Clustering
+Songs with higher levels of danceability, energy, and valence tend to be more popular, attributed to their lively and compelling characteristics. These qualities make such songs ideal for diverse listening scenarios, ranging from parties and workout sessions to mainstream radio play. In contrast, songs with lower scores in these attributes often appeal to specialized markets or specific contexts, such as relaxed environments, introspective times, or thematic playlists designed to evoke certain moods.
+
+In examining the results from the scaled data and the Yeo-Johnson transformation (scaled data_YJ), we find that a more evenly distributed dataset does not necessarily influence the outcome of our clustering model. Nonetheless, it remains critical to choose appropriate data processing techniques, considering the data characteristics and the nature of the analytical problem at hand.
+
+While we have corroborated our initial hypothesis, it is important to note that since PCA 1 and 2 account for only about 50% of the total variance when applied to both datasets, we cannot confidently assert that this represents the trends across the entire dataset.
+
+In summary, a more broadly distributed dataset may enhance our understanding of the overall trends, although the extent of this benefit is contingent upon the specific nuances of the data in question.
+
